@@ -4,26 +4,23 @@
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 工程化原则：
   1. 容错金字塔 — 单站失败→跳过 / 单模型失败→降级 / 全失败→告警
-  2. 输出三通道 — Markdown(WeChat) + HTML(Web) + chart PNG
+  #  2. 输出双通道 — Markdown(WeChat) + HTML(Web ECharts)
   3. 质量标记 — 每份产出标注数据完整性和可信度
   4. 运行日志 — 循环日志记录每阶段耗时和失败详情
   5. 0 外部依赖 — chart 内嵌, HTML 自包含, Nginx 纯静态
 """
 
 import json, yaml, sys, os, time, logging, traceback
-from datetime import datetime, date, timedelta
+from datetime import date, timedelta
 from urllib.request import urlopen
-from urllib.error import URLError
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutTimeout
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 
 # ─── 路径 ───
 DIR       = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR  = os.path.join(DIR, "data")
-CHART_DIR = os.path.join(DATA_DIR, "charts")
 LOG_DIR   = os.path.join(DIR, "logs")
 os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(CHART_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # ─── 日志 — 3 文件循环覆盖 ───
@@ -61,8 +58,8 @@ def _load_config():
 CFG = _load_config()
 TH  = CFG["thresholds"]
 LAG = CFG["basin_lag"]
-FORECAST_DAYS = 4  # 展示 D+1 → D+4
-API_DAYS      = 5  # API 多拉一天（含 D 日）
+FORECAST_DAYS = 5  # D → D+4
+API_DAYS      = 5
 FORECAST_URL  = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL   = "https://archive-api.open-meteo.com/v1/archive"
 API_TIMEOUT   = 10
@@ -79,7 +76,7 @@ def _api_fetch(lat, lon, model=None, archive=False):
             if archive:
                 today = date.today()
                 ly_start = (today.replace(year=today.year-1) - timedelta(days=1)).isoformat()
-                ly_end   = (today.replace(year=today.year-1) + timedelta(days=FORECAST_DAYS)).isoformat()
+                ly_end   = (today.replace(year=today.year-1) + timedelta(days=FORECAST_DAYS-1)).isoformat()
                 params = (f"latitude={lat}&longitude={lon}"
                           f"&start_date={ly_start}&end_date={ly_end}"
                           f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum"
@@ -218,7 +215,7 @@ def _fc(results, name, model="ecmwf"):
     r = results.get(name, {})
     m = r.get(model) or {}
     today = date.today()
-    keys = [(today + timedelta(days=i+1)).isoformat() for i in range(FORECAST_DAYS)]  # D+1→D+4
+    keys = [(today + timedelta(days=i)).isoformat() for i in range(FORECAST_DAYS)]  # D→D+4
     return [m.get(k, {}) for k in keys]
 
 def _fv(results, name, model, field, default=0):
@@ -232,7 +229,7 @@ def _archive_val(results, name, field):
     today = date.today()
     vals = []
     for i in range(FORECAST_DAYS):
-        ly_key = (today.replace(year=today.year-1) + timedelta(days=i+1)).isoformat()  # D+1→D+4
+        ly_key = (today.replace(year=today.year-1) + timedelta(days=i)).isoformat()  # D→D+4
         vals.append(a[ly_key].get(field) if ly_key in a else None)
     return vals
 
@@ -317,7 +314,7 @@ def format_markdown(fetched):
     lines.append(f"\n📌 概况  {' | '.join(parts)}")
     
     # ─── 🌡️ 负荷城市 ───
-    lines.append(f"\n🌡️ 负荷城市（D+1→D+3 气温 ECMWF/CMA）")
+    lines.append(f"\n🌡️ 负荷城市（D→D+2 气温 ECMWF/CMA）")
     for st in CFG.get("load_cities", []):
         eh = _fv(results, st[0], "ecmwf", "high")
         ch = _fv(results, st[0], "cma", "high")
@@ -369,13 +366,13 @@ def format_markdown(fetched):
     lines.append(f"  🏔 融雪: {' '.join(snow_parts)}°C → {'正常' if snow_ok else '⚠低温'}")
     
     # ─── ☀️ 光伏 ───
-    lines.append(f"\n☀️ 光伏（辐照度W/m² D+1→D+2 / ECMWF·CMA）")
+    lines.append(f"\n☀️ 光伏（辐照度W/m² D→D+1 / ECMWF·CMA）")
     for st in CFG.get("solar", []):
         er = _fv(results, st[0], "ecmwf", "rad"); cr = _fv(results, st[0], "cma", "rad")
         lines.append(f"  {st[0]:6s}  E{er[0]:4.0f}→{er[1]:4.0f}/C{cr[0]:4.0f}→{cr[1]:4.0f}  {_solar_judge(er[0])}/{_solar_judge(cr[0])}")
     
     # ─── 💨 风电 ───
-    lines.append(f"\n💨 风电（风速m/s D+1→D+2 / ECMWF·CMA）")
+    lines.append(f"\n💨 风电（风速m/s D→D+1 / ECMWF·CMA）")
     for st in CFG.get("wind_farms", []):
         ew = _fv(results, st[0], "ecmwf", "wind"); cw = _fv(results, st[0], "cma", "wind")
         lines.append(f"  {st[0]:6s}  E{ew[0]:3.1f}→{ew[1]:3.1f}/C{cw[0]:3.1f}→{cw[1]:3.1f}  {_wind_judge(ew[0])}/{_wind_judge(cw[0])}")
@@ -434,26 +431,26 @@ def _build_dashboard_data(fetched):
     """构建 ECharts 仪表盘所需的完整 JSON 数据"""
     results = fetched["results"]
     today = date.today()
-    day_labels = [(today + timedelta(days=i+1)).strftime("%m/%d") for i in range(FORECAST_DAYS)]  # D+1→D+4
+    day_labels = [(today + timedelta(days=i)).strftime("%m/%d") for i in range(FORECAST_DAYS)]  # D→D+4
     
     # ── 温度卡片 ──
     temp_cards = []
     for st in CFG.get("load_cities", []):
         eh = _fv(results, st[0], "ecmwf", "high")
         ch = _fv(results, st[0], "cma", "high")
-        if all(h==0 for h in eh[:4]): continue
+        if all(h==0 for h in eh[:FORECAST_DAYS]) and all(h==0 for h in ch[:FORECAST_DAYS]): continue
         mx = max(eh[0], ch[0])
         icon = _temp_icon(mx)
         temp_cards.append({"name": st[0], "temp": int(mx), "icon": icon})
     
-    # ── 温度趋势(8城市 × 4天 × 2模型) ──
+    # ── 温度趋势(D→D+4) ──
     temp_trend = {"days": day_labels, "series": [], "alert_line": 35}
     for st in CFG.get("load_cities", []):
         eh = _fv(results, st[0], "ecmwf", "high")
         ch = _fv(results, st[0], "cma", "high")
-        if all(h==0 for h in eh[:4]): continue
-        temp_trend["series"].append({"name": f"{st[0]}(E)", "data": [round(h,1) for h in eh[:4]], "type": "ecmwf"})
-        temp_trend["series"].append({"name": f"{st[0]}(C)", "data": [round(h,1) for h in ch[:4]], "type": "cma"})
+        if all(h==0 for h in eh[:FORECAST_DAYS]) and all(h==0 for h in ch[:FORECAST_DAYS]): continue
+        temp_trend["series"].append({"name": f"{st[0]}(E)", "data": [round(h,1) for h in eh[:FORECAST_DAYS]], "type": "ecmwf"})
+        temp_trend["series"].append({"name": f"{st[0]}(C)", "data": [round(h,1) for h in ch[:FORECAST_DAYS]], "type": "cma"})
     
     # ── 水库降雨 ──
     rain_data = {"stations": [], "ecmwf": [], "cma": []}
@@ -497,26 +494,42 @@ def _build_dashboard_data(fetched):
         wind["series"].append({"name": f"{st[0]}(E)", "data": [round(ew[0],1), round(ew[1],1)], "type": "ecmwf"})
         wind["series"].append({"name": f"{st[0]}(C)", "data": [round(cw[0],1), round(cw[1],1)], "type": "cma"})
     
-    # ── 去年同期 ──
-    eh = _fv(results, "成都", "ecmwf", "high")
-    ch = _fv(results, "成都", "cma", "high")
-    ly = _archive_val(results, "成都", "high")
-    yoy = {
-        "days": day_labels,
-        "this_year": [round(max(eh[i], ch[i]), 1) for i in range(FORECAST_DAYS)],
-        "last_year": [round(ly[i], 1) if ly[i] is not None else None for i in range(FORECAST_DAYS)],
-    }
-    
-    # ── 研判文本 ──
-    md = format_markdown(fetched)
+    # ── 研判文本（直接生成，不耦合 format_markdown）──
     judgements = []
-    in_j = False
-    for line in md.split("\n"):
-        if "📊 综合研判" in line: in_j = True; continue
-        if in_j and line.strip():
-            if any(line.strip().startswith(c) for c in ["❶","❷","❸","❹"]):
-                judgements.append(line.strip())
-            elif not line.strip() or line.startswith("数据:"): break
+    cd_eh = _fv(results, "成都", "ecmwf", "high")
+    cd_ch = _fv(results, "成都", "cma", "high")
+    fc_line = TH["temperature"]["forced_cooling"]
+    t0, t1, t2 = max(cd_eh[0], cd_ch[0]), max(cd_eh[1], cd_ch[1]), max(cd_eh[2], cd_ch[2])
+    
+    if t0 >= fc_line and t1 >= fc_line - 2:
+        s = f"❶ 今明高温支撑晚峰→D+1~D+2偏紧"
+        if t2 < 30: s += "，后天降温→D+3负荷回落"
+        judgements.append(s)
+    elif t2 < 30:
+        judgements.append(f"❶ 后天降温→D+3负荷回落")
+    
+    for rs in CFG.get("reservoirs", []):
+        if len(rs) > 4 and rs[4]:
+            er = _fv(results, rs[0], "ecmwf", "rain")[0]
+            cr = _fv(results, rs[0], "cma", "rain")[0]
+            avg = (er+cr)/2; lag = LAG.get(rs[3], "")
+            if avg >= TH["rainfall"]["medium"]:
+                div = " ⚠分歧" if _divergence(er, cr) else ""
+                judgements.append(f"❷ {rs[0]}{lag}{avg:.0f}mm{div}→入库改善偏空")
+                break
+    
+    total_rain = sum(_fv(results, r[0], "ecmwf", "rain")[0] for r in CFG.get("reservoirs", []))
+    if total_rain < 30:
+        judgements.append(f"❸ 降雨整体偏少→来水无突变")
+    else:
+        judgements.append(f"❸ 关注来水增加后的偏空压力")
+    
+    ly_high = _archive_val(results, "成都", "high")
+    if ly_high[0] is not None:
+        diff = max(cd_eh[0], cd_ch[0]) - ly_high[0]
+        if abs(diff) >= 3:
+            warmer = "强于" if diff > 0 else "弱于"
+            judgements.append(f"❹ 今年高温{warmer}去年(+{abs(diff):.0f}°C→供需偏紧)")
     
     # ── 盆地高温 ──
     hotspots = []
@@ -537,7 +550,6 @@ def _build_dashboard_data(fetched):
         "upstream": upstream,
         "solar": solar,
         "wind": wind,
-        "yoy": yoy,
         "hotspots": hotspots,
         "judgements": judgements,
     }
@@ -647,7 +659,7 @@ body{{background:#0f0f1a;color:#d0d0d0;font:14px/1.6 -apple-system,PingFang SC,M
 
     # ── 温度趋势图 ──
     html += '''<div class="chart-grid">
-<div class="chart-box full"><h3>📈 负荷城市 D+1→D+4 气温趋势 (ECMWF实线 / CMA虚线 · 35°C警戒)</h3>
+<div class="chart-box full"><h3>📈 负荷城市 D→D+4 气温趋势 (ECMWF实线 / CMA虚线 · 35°C警戒)</h3>
 <div class="chart tall" id="chart_temp"></div></div>
 </div>
 
@@ -754,7 +766,7 @@ makeChart('chart_temp', {{
       symbol:s.type==='ecmwf'?'circle':'diamond',symbolSize:s.type==='ecmwf'?6:4,
       emphasis:{{focus:'series'}}
     }})),
-    {{name:'强制冷线',type:'line',data:[{_fc_line_e},{_fc_line_e},{_fc_line_e},{_fc_line_e}],
+    {{name:'强制冷线',type:'line',data:[{_fc_line_e},{_fc_line_e},{_fc_line_e},{_fc_line_e},{_fc_line_e}],
       lineStyle:{{color:'#EF5350',width:1,type:'dotted'}},
       symbol:'none',silent:true,z:0}}
   ]
