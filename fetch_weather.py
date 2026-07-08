@@ -629,9 +629,8 @@ body{{background:#0f0f1a;color:#d0d0d0;font:14px/1.6 -apple-system,PingFang SC,M
     html += '</div>\n\n'
 
     # ── 温度趋势图 ──
-    _fc_label = TH["temperature"]["forced_cooling"]
-    html += f'''<div class="chart-grid">
-<div class="chart-box full"><h3>📈 负荷城市 D→D+4 气温趋势 (ECMWF实线 / CMA虚线 · {_fc_label}°C警戒)</h3>
+    html += '''<div class="chart-grid">
+<div class="chart-box full"><h3>📈 负荷城市 D→D+4 气温热力图 (ECMWF/CMA取高)</h3>
 <div class="chart tall" id="chart_temp"></div></div>
 </div>
 
@@ -688,7 +687,7 @@ body{{background:#0f0f1a;color:#d0d0d0;font:14px/1.6 -apple-system,PingFang SC,M
         _c = _solar_colors[_si % len(_solar_colors)]
         _name = _s['name'].replace("'", "\\'")
         _data = json.dumps(_s['data'])
-        _js = "{name:'%s',type:'bar',yAxisIndex:0,data:%s,itemStyle:{color:'%s',borderRadius:[3,3,0,0]},barCategoryGap:'20%%'}" % (_name, _data, _c)
+        _js = "{name:'%s',type:'bar',data:%s,itemStyle:{color:'%s',borderRadius:[3,3,0,0]},barCategoryGap:'20%%'}" % (_name, _data, _c)
         _solar_js_parts.append(_js)
     _solar_series_js = ",\n    ".join(_solar_js_parts)
     
@@ -701,7 +700,6 @@ body{{background:#0f0f1a;color:#d0d0d0;font:14px/1.6 -apple-system,PingFang SC,M
         _js = "{name:'%s',type:'line',data:%s,lineStyle:{color:'%s',type:'%s',width:1.2},symbol:'circle',symbolSize:4}" % (_name, _data, _c, _style)
         _wind_js_parts.append(_js)
     _wind_series_js = ",\n    ".join(_wind_js_parts)
-    _fc_line_e = TH["temperature"]["forced_cooling"]  # 强制冷线值
     
     st_count = len(_build_station_list())
     html += f'<div class="footer">ECMWF IFS + CMA GRAPES · {st_count}站 · {data["date"]} 08:30</div>'
@@ -713,7 +711,6 @@ const D = {data_json};
 
 // 配色
 const C_E = '#4FC3F7', C_C = '#FFB74D', C_BG = '#161625';
-const FORECAST_DAYS = D.temp_trend.days.length;
 
 function makeChart(id, option) {{
   const el = document.getElementById(id);
