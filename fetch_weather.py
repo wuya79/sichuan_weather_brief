@@ -427,181 +427,340 @@ def format_markdown(fetched):
 
 
 # ═══════════════════════════════════════════
-# ⑤ 图表生成（matplotlib）
+# ⑤ 仪表盘数据导出 + HTML 生成
 # ═══════════════════════════════════════════
 
-def _matplotlib_setup():
-    """配置 matplotlib 中文 + 暗色风格，失败则跳过图表"""
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        from matplotlib import pyplot as plt
-        from matplotlib.font_manager import FontProperties
-        # 中文字体
-        _font_paths = [
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        ]
-        _fp = None
-        for _p in _font_paths:
-            if os.path.exists(_p):
-                _fp = FontProperties(fname=_p)
-                break
-        if _fp is None:
-            log.warning("中文字体未找到，图表使用英文")
-        # 暗色风格
-        plt.style.use("dark_background")
-        return plt, _fp
-    except Exception as e:
-        log.warning(f"matplotlib 初始化失败: {e}")
-        return None, None
-
-
-def generate_charts(fetched):
-    """生成 3 张 PNG 图表。失败不崩主流程。"""
-    plt, fp = _matplotlib_setup()
-    if plt is None:
-        log.warning("matplotlib 不可用，跳过图表生成")
-        return []
-    
+def _build_dashboard_data(fetched):
+    """构建 ECharts 仪表盘所需的完整 JSON 数据"""
     results = fetched["results"]
     today = date.today()
     day_labels = [(today + timedelta(days=i)).strftime("%m/%d") for i in range(FORECAST_DAYS)]
-    x = range(len(day_labels))
-    generated = []
-    colors = {"ecmwf": "#4FC3F7", "cma": "#FFB74D"}  # 色盲友好
     
-    # ── 图1: 负荷城市温度趋势 ──
-    try:
-        fig, ax = plt.subplots(figsize=(10, 4.5))
-        ax.set_title("负荷城市 D→D+3 气温趋势" + ("" if fp else " (ECMWF solid / CMA dashed)"), 
-                     fontproperties=fp, fontsize=13, pad=12)
-        for st in CFG["load_cities"]:
-            eh = _fv(results, st[0], "ecmwf", "high")
-            ch = _fv(results, st[0], "cma", "high")
-            if all(h==0 for h in eh[:4]): continue
-            ax.plot(x, eh[:4], color=colors["ecmwf"], linewidth=1.5, marker="o", markersize=4, label=f"{st[0]}(E)")
-            ax.plot(x, ch[:4], color=colors["cma"], linewidth=1, linestyle="--", marker="s", markersize=3, alpha=0.7, label=f"{st[0]}(C)")
-        ax.axhline(35, color="#EF5350", linewidth=1, linestyle=":", alpha=0.5)
-        ax.text(3.5, 35.5, "35°C 强制冷线", color="#EF5350", fontsize=8, fontproperties=fp)
-        ax.set_xticks(x); ax.set_xticklabels(day_labels, fontproperties=fp)
-        ax.set_ylabel("°C", fontproperties=fp)
-        ax.legend(loc="upper right", fontsize=7, ncol=2, prop=fp)
-        ax.grid(alpha=0.15)
-        path = os.path.join(CHART_DIR, "temp_trend.png")
-        fig.tight_layout(); fig.savefig(path, dpi=80, facecolor="#1a1a2e")
-        plt.close(fig); generated.append(path)
-    except Exception as e:
-        log.warning(f"温度图表失败: {e}")
+    # ── 温度卡片 ──
+    temp_cards = []
+    for st in CFG.get("load_cities", []):
+        eh = _fv(results, st[0], "ecmwf", "high")
+        ch = _fv(results, st[0], "cma", "high")
+        if all(h==0 for h in eh[:4]): continue
+        mx = max(eh[0], ch[0])
+        icon = _temp_icon(mx)
+        temp_cards.append({"name": st[0], "temp": int(mx), "icon": icon})
     
-    # ── 图2: 水库降雨柱状图 ──
-    try:
-        fig, ax = plt.subplots(figsize=(9, 4))
-        ax.set_title("水库 72h 累计降雨" + ("" if fp else " (ECMWF solid / CMA hatched)"),
-                     fontproperties=fp, fontsize=13, pad=12)
-        reserves = CFG.get("reservoirs", [])
-        names = [r[0] for r in reserves]
-        e_vals = [_fv(results, r[0], "ecmwf", "rain")[0] for r in reserves]
-        c_vals = [_fv(results, r[0], "cma", "rain")[0] for r in reserves]
-        w = 0.35; xi = range(len(names))
-        ax.bar([i-w/2 for i in xi], e_vals, w, color=colors["ecmwf"], alpha=0.9, label="ECMWF")
-        ax.bar([i+w/2 for i in xi], c_vals, w, color=colors["cma"], alpha=0.7, label="CMA", hatch="//")
-        ax.set_xticks(xi); ax.set_xticklabels(names, fontproperties=fp, rotation=30, ha="right", fontsize=9)
-        ax.set_ylabel("mm", fontproperties=fp)
-        ax.legend(loc="upper right", fontsize=8, prop=fp)
-        ax.grid(axis="y", alpha=0.15)
-        path = os.path.join(CHART_DIR, "rain_bars.png")
-        fig.tight_layout(); fig.savefig(path, dpi=80, facecolor="#1a1a2e")
-        plt.close(fig); generated.append(path)
-    except Exception as e:
-        log.warning(f"降雨图表失败: {e}")
+    # ── 温度趋势(8城市 × 4天 × 2模型) ──
+    temp_trend = {"days": day_labels, "series": [], "alert_line": 35}
+    for st in CFG.get("load_cities", []):
+        eh = _fv(results, st[0], "ecmwf", "high")
+        ch = _fv(results, st[0], "cma", "high")
+        if all(h==0 for h in eh[:4]): continue
+        temp_trend["series"].append({"name": f"{st[0]}(E)", "data": [round(h,1) for h in eh[:4]], "type": "ecmwf"})
+        temp_trend["series"].append({"name": f"{st[0]}(C)", "data": [round(h,1) for h in ch[:4]], "type": "cma"})
     
-    # ── 图3: 去年同期对比 ──
-    try:
-        fig, ax = plt.subplots(figsize=(8, 3.5))
-        ax.set_title("成都气温 今年 vs 去年" + ("" if fp else ""), fontproperties=fp, fontsize=13, pad=12)
-        x2 = range(FORECAST_DAYS)
-        eh = _fv(results, "成都", "ecmwf", "high"); ch = _fv(results, "成都", "cma", "high")
-        ly = _archive_val(results, "成都", "high")
-        this_yr = [max(eh[i], ch[i]) for i in range(FORECAST_DAYS)]
-        ax.plot(x2, this_yr, color="#4FC3F7", linewidth=2, marker="o", markersize=6, label="今年(ECMWF/CMA取高)")
-        if ly[0] is not None:
-            ax.plot(x2, ly[:FORECAST_DAYS], color="#81C784", linewidth=1.5, linestyle="--", marker="s", markersize=5, label="去年")
-        ax.set_xticks(x2); ax.set_xticklabels(day_labels, fontproperties=fp)
-        ax.set_ylabel("°C", fontproperties=fp)
-        ax.legend(loc="upper right", fontsize=9, prop=fp)
-        ax.grid(alpha=0.15)
-        path = os.path.join(CHART_DIR, "yoy_compare.png")
-        fig.tight_layout(); fig.savefig(path, dpi=80, facecolor="#1a1a2e")
-        plt.close(fig); generated.append(path)
-    except Exception as e:
-        log.warning(f"同比图表失败: {e}")
+    # ── 水库降雨 ──
+    rain_data = {"stations": [], "ecmwf": [], "cma": []}
+    for rs in CFG.get("reservoirs", []):
+        er = _fv(results, rs[0], "ecmwf", "rain")[0]
+        cr = _fv(results, rs[0], "cma", "rain")[0]
+        rain_data["stations"].append(rs[0])
+        rain_data["ecmwf"].append(round(max(er,0), 1))
+        rain_data["cma"].append(round(max(cr,0), 1))
     
-    return generated
-
-
-# ═══════════════════════════════════════════
-# ⑥ HTML 生成
-# ═══════════════════════════════════════════
-
-def generate_html(fetched, chart_files):
-    """生成自包含 HTML 页面，chart_files 为空也不崩"""
-    quality = fetched["quality"]
-    today = date.today().strftime("%m-%d")
-    qt = _quality_tag(quality)
-    charts_html = ""
-    for cf in chart_files:
-        fname = os.path.basename(cf)
-        charts_html += f'<img src="charts/{fname}" alt="{fname}">\n'
+    # ── 融雪 ──
+    snow = []
+    snow_ok = True
+    for st in CFG.get("snowmelt", []):
+        el = _fv(results, st[0], "ecmwf", "low")[0]
+        cl = _fv(results, st[0], "cma", "low")[0]
+        mn = int(min(el, cl))
+        if mn < 0: snow_ok = False
+        snow.append({"name": st[0], "temp": mn})
     
-    # 综合研判提取
+    # ── 上游来水 ──
+    upstream = []
+    for st in CFG.get("upstream", []):
+        er = _fv(results, st[0], "ecmwf", "rain")[0]
+        cr = _fv(results, st[0], "cma", "rain")[0]
+        upstream.append({"name": st[0], "rain": round(max(er,cr), 1)})
+    
+    # ── 光伏 ──
+    solar = {"days": day_labels[:2], "series": []}
+    for st in CFG.get("solar", []):
+        er = _fv(results, st[0], "ecmwf", "rad")
+        cr = _fv(results, st[0], "cma", "rad")
+        solar["series"].append({"name": f"{st[0]}(E)", "data": [round(er[0]), round(er[1])], "type": "ecmwf"})
+        solar["series"].append({"name": f"{st[0]}(C)", "data": [round(cr[0]), round(cr[1])], "type": "cma"})
+    
+    # ── 风电 ──
+    wind = {"days": day_labels[:2], "series": []}
+    for st in CFG.get("wind_farms", []):
+        ew = _fv(results, st[0], "ecmwf", "wind")
+        cw = _fv(results, st[0], "cma", "wind")
+        wind["series"].append({"name": f"{st[0]}(E)", "data": [round(ew[0],1), round(ew[1],1)], "type": "ecmwf"})
+        wind["series"].append({"name": f"{st[0]}(C)", "data": [round(cw[0],1), round(cw[1],1)], "type": "cma"})
+    
+    # ── 去年同期 ──
+    eh = _fv(results, "成都", "ecmwf", "high")
+    ch = _fv(results, "成都", "cma", "high")
+    ly = _archive_val(results, "成都", "high")
+    yoy = {
+        "days": day_labels,
+        "this_year": [round(max(eh[i], ch[i]), 1) for i in range(FORECAST_DAYS)],
+        "last_year": [round(ly[i], 1) if ly[i] is not None else None for i in range(FORECAST_DAYS)],
+    }
+    
+    # ── 研判文本 ──
     md = format_markdown(fetched)
-    judge_lines = []
-    in_judge = False
+    judgements = []
+    in_j = False
     for line in md.split("\n"):
-        if "📊 综合研判" in line:
-            in_judge = True; continue
-        if in_judge:
-            if line.strip().startswith("❶") or line.strip().startswith("❷") or line.strip().startswith("❸") or line.strip().startswith("❹"):
-                judge_lines.append(line.strip())
-            elif not line.strip() or line.startswith("数据:"):
-                break
+        if "📊 综合研判" in line: in_j = True; continue
+        if in_j and line.strip():
+            if any(line.strip().startswith(c) for c in ["❶","❷","❸","❹"]):
+                judgements.append(line.strip())
+            elif not line.strip() or line.startswith("数据:"): break
     
-    html = f"""<!DOCTYPE html>
+    # ── 盆地高温 ──
+    hotspots = []
+    for hs in CFG.get("basin_hotspots", []):
+        eh = _fv(results, hs[0], "ecmwf", "high")[0]
+        ch = _fv(results, hs[0], "cma", "high")[0]
+        hotspots.append({"name": hs[0], "temp": int(max(eh, ch))})
+    
+    return {
+        "date": today.strftime("%m/%d"),
+        "quality": _quality_tag(fetched["quality"]),
+        "elapsed": "—",
+        "temp_cards": temp_cards,
+        "temp_trend": temp_trend,
+        "rain_data": rain_data,
+        "snow": snow,
+        "snow_ok": snow_ok,
+        "upstream": upstream,
+        "solar": solar,
+        "wind": wind,
+        "yoy": yoy,
+        "hotspots": hotspots,
+        "judgements": judgements,
+    }
+
+
+def generate_html(fetched, elapsed=0.0):
+    """生成 ECharts 仪表盘 HTML。自包含，单文件。"""
+    data = _build_dashboard_data(fetched)
+    data["elapsed"] = f"{elapsed:.0f}s"
+    data_json = json.dumps(data, ensure_ascii=False)
+    
+    html = f'''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>四川交易天气简报 {today}</title>
+<title>四川交易天气简报 {data["date"]}</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 <style>
-  *{{margin:0;padding:0;box-sizing:border-box}}
-  body{{background:#1a1a2e;color:#e0e0e0;font:14px/1.6 -apple-system,sans-serif;max-width:920px;margin:0 auto;padding:16px}}
-  h1{{text-align:center;font-size:20px;margin:12px 0 20px;color:#fff}}
-  img{{max-width:100%;display:block;margin:20px auto;border-radius:8px;border:1px solid #333}}
-  .no-charts{{text-align:center;color:#888;padding:40px;font-size:16px}}
-  .judgement{{background:#16213e;padding:16px 20px;border-radius:8px;margin:20px 0;line-height:1.8}}
-  .judgement p{{margin:4px 0}}
-  .footer{{text-align:center;color:#666;font-size:12px;margin-top:24px;padding-top:12px;border-top:1px solid #333}}
-  .quality{{display:inline-block;background:#0f3460;color:#4FC3F7;padding:2px 10px;border-radius:4px;font-size:11px;margin-left:8px}}
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#0f0f1a;color:#d0d0d0;font:13px/1.5 -apple-system,PingFang SC,Microsoft YaHei,sans-serif;min-height:100vh}}
+.header{{background:linear-gradient(135deg,#1a1a3e,#0d1b3e);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #2a2a4a;flex-wrap:wrap;gap:8px}}
+.header h1{{font-size:20px;color:#fff}}
+.header .meta{{display:flex;gap:12px;font-size:12px;color:#aaa;flex-wrap:wrap}}
+.header .meta span{{background:#1e2d4a;padding:3px 10px;border-radius:4px}}
+.container{{max-width:1100px;margin:0 auto;padding:12px 16px}}
+
+.cards{{display:grid;grid-template-columns:repeat(auto-fill,minmax(115px,1fr));gap:8px;margin-bottom:16px}}
+.card{{background:linear-gradient(135deg,#1e2d4a,#162040);border-radius:10px;padding:10px 12px;text-align:center;border:1px solid #2a3a5a;transition:all 0.2s}}
+.card:hover{{border-color:#4FC3F7;transform:translateY(-1px)}}
+.card .name{{font-size:12px;color:#aaa;margin-bottom:4px}}
+.card .temp{{font-size:26px;font-weight:700;margin:4px 0}}
+.card .icon{{font-size:12px}}
+.card.hot .temp{{color:#FF5252}}
+.card.warm .temp{{color:#FFB74D}}
+.card.mild .temp{{color:#FFD740}}
+.card.cool .temp{{color:#4FC3F7}}
+
+.chart-grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}}
+.chart-box{{background:#161625;border-radius:10px;padding:12px;border:1px solid #2a2a4a}}
+.chart-box.full{{grid-column:1/-1}}
+.chart-box h3{{font-size:14px;color:#ccc;margin-bottom:8px;font-weight:500}}
+.chart-box .chart{{width:100%;height:280px}}
+.chart-box .chart.tall{{height:320px}}
+
+.info-row{{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-bottom:12px}}
+.info-card{{background:#161625;border-radius:8px;padding:10px 14px;border:1px solid #2a2a4a}}
+.info-card h4{{font-size:12px;color:#888;margin-bottom:6px}}
+.info-card .val{{font-size:13px;color:#ddd;line-height:1.6}}
+
+.judge{{background:linear-gradient(135deg,#1a2a1a,#1a1a2e);border-radius:10px;padding:16px 20px;border:1px solid #2a4a2a;margin-bottom:12px}}
+.judge h3{{font-size:14px;color:#81C784;margin-bottom:10px}}
+.judge p{{font-size:13px;line-height:1.8;color:#c0c0c0;margin:2px 0}}
+
+.footer{{text-align:center;color:#555;font-size:11px;padding:16px 0 24px}}
+
+@media(max-width:768px){{
+  .chart-grid{{grid-template-columns:1fr}}
+  .cards{{grid-template-columns:repeat(4,1fr)}}
+  .header{{flex-direction:column;align-items:flex-start}}
+}}
 </style>
 </head>
 <body>
-<h1>🌤️ 四川交易天气简报 {today}</h1>
-{charts_html if charts_html else '<div class="no-charts">📊 图表生成失败，请查看 Markdown 简报</div>'}
-<div class="judgement">
-{chr(10).join(f'<p>{l}</p>' for l in judge_lines) if judge_lines else '<p>研判数据暂缺</p>'}
+<div class="header">
+  <h1>🌤️ 四川电力交易天气简报 {data["date"]}</h1>
+  <div class="meta">
+    <span>ECMWF + CMA</span><span>{data["quality"]}</span><span>耗时 {data["elapsed"]}</span>
+  </div>
 </div>
-<div class="footer">
-  数据: ECMWF IFS + CMA GRAPES | 36站 | {today} 08:30
-  <span class="quality">{qt}</span>
+<div class="container">
+
+<!-- 温度卡片 -->
+<div class="cards">
+'''
+
+    for card in data["temp_cards"]:
+        t = card["temp"]
+        cls = "hot" if t >= 35 else "warm" if t >= 33 else "mild" if t >= 30 else "cool"
+        html += f'<div class="card {cls}"><div class="name">{card["name"]}</div><div class="temp">{t}°</div><div class="icon">{card["icon"]}</div></div>\n'
+
+    html += '</div>\n\n'
+
+    # ── 温度趋势图 ──
+    html += '''<div class="chart-grid">
+<div class="chart-box full"><h3>📈 负荷城市 D→D+3 气温趋势 (ECMWF实线 / CMA虚线 · 35°C警戒)</h3>
+<div class="chart tall" id="chart_temp"></div></div>
 </div>
+
+<!-- 水库+新能源 双栏 -->
+<div class="chart-grid">
+<div class="chart-box"><h3>💧 水库 72h 降雨 (ECMWF深蓝 / CMA浅蓝)</h3>
+<div class="chart" id="chart_rain"></div></div>
+<div class="chart-box"><h3>☀️💨 新能源 D→D+1</h3>
+<div class="chart" id="chart_re"></div></div>
+</div>
+
+<!-- 去年同期 -->
+<div class="chart-grid">
+<div class="chart-box full"><h3>📅 成都气温 今年 vs 去年</h3>
+<div class="chart" id="chart_yoy"></div></div>
+</div>
+
+<!-- 补充信息行 -->
+<div class="info-row">
+'''
+
+    # 盆地高温
+    hs_text = "  ".join(f"{h['name']}{h['temp']}°" for h in data["hotspots"])
+    html += f'<div class="info-card"><h4>🔥 盆地腹地高温</h4><div class="val">{hs_text}</div></div>\n'
+
+    # 融雪
+    sn_text = "  ".join(f"{s['name']}{s['temp']}°" for s in data["snow"])
+    sn_status = "正常" if data["snow_ok"] else "⚠️低温"
+    html += f'<div class="info-card"><h4>🏔 融雪监测</h4><div class="val">{sn_text}<br>→ {sn_status}</div></div>\n'
+
+    # 上游来水
+    up_text = "  ".join(f"{u['name']}{u['rain']:.0f}mm" for u in data["upstream"])
+    html += f'<div class="info-card"><h4>💧 上游来水区</h4><div class="val">{up_text}<br>→ 来水温和</div></div>\n'
+
+    html += '</div>\n\n'
+
+    # ── 综合研判 ──
+    if data["judgements"]:
+        html += '<div class="judge"><h3>📊 综合研判</h3>\n'
+        for j in data["judgements"]:
+            html += f'<p>{j}</p>\n'
+        html += '</div>\n\n'
+
+    html += f'<div class="footer">ECMWF IFS + CMA GRAPES · 36站 · {data["date"]} 08:30 · <a href="http://118.24.77.156:18080/weather/" style="color:#4FC3F7">刷新</a></div>\n'
+
+    # ── ECharts 图表脚本 ──
+    html += f'''</div>
+<script>
+const D = {data_json};
+
+// 配色
+const C_E = '#4FC3F7', C_C = '#FFB74D', C_BG = '#161625';
+
+function makeChart(id, option) {{
+  const el = document.getElementById(id);
+  if (!el) return;
+  const chart = echarts.init(el, null, {{renderer:'canvas'}});
+  option.backgroundColor = C_BG;
+  option.textStyle = {{color:'#aaa',fontSize:11}};
+  chart.setOption(option);
+  window.addEventListener('resize', ()=>chart.resize());
+}}
+
+// ① 温度趋势
+makeChart('chart_temp', {{
+  tooltip: {{trigger:'axis'}},
+  legend: {{type:'scroll',bottom:0,textStyle:{{color:'#aaa',fontSize:10}},data:D.temp_trend.series.filter(s=>s.type==='ecmwf').map(s=>s.name.replace('(E)',''))}},
+  grid: {{top:10,right:30,bottom:40,left:40}},
+  xAxis: {{type:'category',data:D.temp_trend.days,axisLine:{{lineStyle:{{color:'#444'}}}}}},
+  yAxis: {{type:'value',name:'°C',min:20,axisLine:{{lineStyle:{{color:'#444'}}}}}},
+  series: [
+    ...D.temp_trend.series.map(s => ({{
+      name:s.name,type:'line',data:s.data,
+      lineStyle:{{color:s.type==='ecmwf'?C_E:C_C,width:s.type==='ecmwf'?2:1,type:s.type==='ecmwf'?'solid':'dashed'}},
+      itemStyle:{{color:s.type==='ecmwf'?C_E:C_C}},
+      symbol:s.type==='ecmwf'?'circle':'diamond',symbolSize:s.type==='ecmwf'?6:4,
+      emphasis:{{focus:'series'}}
+    }})),
+    {{name:'强制冷线',type:'line',data:[35,35,35,35],
+      lineStyle:{{color:'#EF5350',width:1,type:'dotted'}},
+      symbol:'none',silent:true,z:0}}
+  ]
+}});
+
+// ② 水库降雨
+makeChart('chart_rain', {{
+  tooltip: {{trigger:'axis'}},
+  grid: {{top:10,right:20,bottom:50,left:40}},
+  xAxis: {{type:'category',data:D.rain_data.stations,axisLabel:{{rotate:30,fontSize:10,color:'#aaa'}}}},
+  yAxis: {{type:'value',name:'mm'}},
+  legend: {{bottom:0,textStyle:{{color:'#aaa',fontSize:10}}}},
+  series: [
+    {{name:'ECMWF',type:'bar',data:D.rain_data.ecmwf,itemStyle:{{color:C_E,borderRadius:[3,3,0,0]}},barGap:'10%'}},
+    {{name:'CMA',type:'bar',data:D.rain_data.cma,itemStyle:{{color:C_C+'88',borderColor:C_C,borderRadius:[3,3,0,0]}}}}
+  ]
+}});
+
+// ③ 新能源
+makeChart('chart_re', {{
+  tooltip: {{trigger:'axis'}},
+  legend: {{bottom:0,textStyle:{{color:'#aaa',fontSize:10}}}},
+  grid: {{top:10,right:50,bottom:40,left:40}},
+  xAxis: {{type:'category',data:D.solar.days}},
+  yAxis: [
+    {{type:'value',name:'W/m²',axisLine:{{lineStyle:{{color:'#FFB74D'}}}}}},
+    {{type:'value',name:'m/s',axisLine:{{lineStyle:{{color:'#4FC3F7'}}}}}}
+  ],
+  series: [
+    {{name:'甘孜光伏(E)',type:'bar',yAxisIndex:0,data:[D.solar.series[0].data[0],D.solar.series[0].data[1]],itemStyle:{{color:'#FFA726',borderRadius:[3,3,0,0]}}}},
+    {{name:'甘孜光伏(C)',type:'bar',yAxisIndex:0,data:[D.solar.series[1].data[0],D.solar.series[1].data[1]],itemStyle:{{color:'#FFCC80',borderRadius:[3,3,0,0]}}}},
+    {{name:'凉山风电(E)',type:'line',yAxisIndex:1,data:D.wind.series[0].data,lineStyle:{{color:C_E}},symbol:'circle',symbolSize:6}},
+    {{name:'凉山风电(C)',type:'line',yAxisIndex:1,data:D.wind.series[1].data,lineStyle:{{color:C_C,type:'dashed'}},symbol:'diamond',symbolSize:5}}
+  ]
+}});
+
+// ④ 去年同期
+makeChart('chart_yoy', {{
+  tooltip: {{trigger:'axis'}},
+  legend: {{bottom:0,textStyle:{{color:'#aaa',fontSize:11}}}},
+  grid: {{top:10,right:20,bottom:30,left:40}},
+  xAxis: {{type:'category',data:D.yoy.days}},
+  yAxis: {{type:'value',name:'°C',min:25,max:45}},
+  series: [
+    {{name:'今年(ECMWF/CMA取高)',type:'line',data:D.yoy.this_year,
+      lineStyle:{{color:C_E,width:2.5}},itemStyle:{{color:C_E}},symbol:'circle',symbolSize:8}},
+    {{name:'去年',type:'line',data:D.yoy.last_year,
+      lineStyle:{{color:'#81C784',width:2,type:'dashed'}},itemStyle:{{color:'#81C784'}},symbol:'diamond',symbolSize:7}}
+  ]
+}});
+</script>
 </body>
-</html>"""
+</html>'''
     return html
 
 
 # ═══════════════════════════════════════════
-# ⑦ 主入口
+# ⑥ 主入口
 # ═══════════════════════════════════════════
 
 def main():
@@ -627,22 +786,16 @@ def main():
     dt_md = time.monotonic() - t2
     log.info(f"Markdown: {len(md)}字 ({dt_md:.1f}s)")
     
-    # ③ 图表
+    # ③ HTML（内嵌 ECharts 仪表盘）
     t3 = time.monotonic()
-    chart_files = generate_charts(fetched)
-    dt_chart = time.monotonic() - t3
-    log.info(f"图表: {len(chart_files)}/3张 ({dt_chart:.1f}s)")
-    
-    # ④ HTML
-    t4 = time.monotonic()
-    html = generate_html(fetched, chart_files)
+    html = generate_html(fetched, elapsed=dt_fetch)
     html_path = os.path.join(DATA_DIR, "index.html")
     with open(html_path, "w") as f:
         f.write(html)
-    dt_html = time.monotonic() - t4
+    dt_html = time.monotonic() - t3
     log.info(f"HTML: {len(html)}字 ({dt_html:.1f}s)")
     
-    # ⑤ 完成
+    # ④ 完成
     dt_total = time.monotonic() - t0
     log.info(f"完成: {dt_total:.1f}s | MD={md_path} | HTML={html_path}")
     
