@@ -348,7 +348,7 @@ def format_markdown(fetched):
     t0, t1, t2 = max(cd_eh[0], cd_ch[0]), max(cd_eh[1], cd_ch[1]), max(cd_eh[2], cd_ch[2])
     if t0 >= TH["temperature"]["cooling_support"]: parts.append("今明高温" if t1 >= TH["temperature"]["cooling_support"] else "今天高温")
     if t2 < 30: parts.append("后天降温")
-    parts.append(f"≥35°C {hot_count}站")
+    fc_label = TH["temperature"]["forced_cooling"]; parts.append(f"≥{fc_label}°C {hot_count}站")
     parts.append(f"{max_r_st}雨{max_r_v:.0f}mm" if max_r_st else "无明显降雨")
     lines.append(f"\n📌 概况  {' | '.join(parts)}")
     
@@ -376,7 +376,7 @@ def format_markdown(fetched):
         ch = _fv(results, st[0], "cma", "high")[0]
         ind_parts.append(f"{st[0]}{max(eh,ch):.0f}")
     lines.append(f"  工业区: {' '.join(ind_parts)}°C")
-    lines.append(f"  ≥35°C站次: 今{hot_count}站")
+    lines.append(f"  ≥{fc_label}°C站次: 今{hot_count}站")
     
     # ─── 💧 水电区域 ───
     lines.append(f"\n💧 水电区域（降雨mm→入库滞后 / ECMWF·CMA）")
@@ -629,14 +629,15 @@ body{{background:#0f0f1a;color:#d0d0d0;font:14px/1.6 -apple-system,PingFang SC,M
     html += '</div>\n\n'
 
     # ── 温度趋势图 ──
-    html += '''<div class="chart-grid">
-<div class="chart-box full"><h3>📈 负荷城市 D→D+4 气温趋势 (ECMWF实线 / CMA虚线 · 35°C警戒)</h3>
+    _fc_label = TH["temperature"]["forced_cooling"]
+    html += f'''<div class="chart-grid">
+<div class="chart-box full"><h3>📈 负荷城市 D→D+4 气温趋势 (ECMWF实线 / CMA虚线 · {_fc_label}°C警戒)</h3>
 <div class="chart tall" id="chart_temp"></div></div>
 </div>
 
 <!-- 水库 -->
 <div class="chart-grid">
-<div class="chart-box full"><h3>💧 水库 72h 降雨 (ECMWF深蓝 / CMA浅蓝)</h3>
+<div class="chart-box full"><h3>💧 水库 当日降雨 (ECMWF深蓝 / CMA浅蓝)</h3>
 <div class="chart" id="chart_rain"></div></div>
 </div>
 
@@ -712,6 +713,7 @@ const D = {data_json};
 
 // 配色
 const C_E = '#4FC3F7', C_C = '#FFB74D', C_BG = '#161625';
+const FORECAST_DAYS = D.temp_trend.days.length;
 
 function makeChart(id, option) {{
   const el = document.getElementById(id);
@@ -738,7 +740,7 @@ makeChart('chart_temp', {{
       symbol:s.type==='ecmwf'?'circle':'diamond',symbolSize:s.type==='ecmwf'?6:4,
       emphasis:{{focus:'series'}}
     }})),
-    {{name:'强制冷线',type:'line',data:[{_fc_line_e},{_fc_line_e},{_fc_line_e},{_fc_line_e},{_fc_line_e}],
+    {{name:'强制冷线',type:'line',data:Array(FORECAST_DAYS).fill(_fc_line_e),
       lineStyle:{{color:'#EF5350',width:1,type:'dotted'}},
       symbol:'none',silent:true,z:0}}
   ]
