@@ -263,8 +263,47 @@ def _divergence(v1, v2):
     if avg < 1: return False
     return abs(v1 - v2) / avg > 0.3
 
+def _build_judgements(results):
+    """生成综合研判文本 — Markdown 和 Web 共用"""
+    cd_eh = _fv(results, "成都", "ecmwf", "high")
+    cd_ch = _fv(results, "成都", "cma", "high")
+    fc_line = TH["temperature"]["forced_cooling"]
+    t0, t1, t2 = max(cd_eh[0], cd_ch[0]), max(cd_eh[1], cd_ch[1]), max(cd_eh[2], cd_ch[2])
+    judgements = []
+    
+    if t0 >= fc_line and t1 >= fc_line - 2:
+        s = f"❶ 今明高温支撑晚峰→D+1~D+2偏紧"
+        if t2 < 30: s += "，后天降温→D+3负荷回落"
+        judgements.append(s)
+    elif t2 < 30:
+        judgements.append(f"❶ 后天降温→D+3负荷回落")
+    
+    for rs in CFG.get("reservoirs", []):
+        if len(rs) > 4 and rs[4]:
+            er = _fv(results, rs[0], "ecmwf", "rain")[0]
+            cr = _fv(results, rs[0], "cma", "rain")[0]
+            avg = (er+cr)/2; lag = LAG.get(rs[3], "")
+            if avg >= TH["rainfall"]["medium"]:
+                div = " ⚠分歧" if _divergence(er, cr) else ""
+                judgements.append(f"❷ {rs[0]}{lag}{avg:.0f}mm{div}→入库改善偏空")
+                break
+    
+    total_rain = sum(_fv(results, r[0], "ecmwf", "rain")[0] for r in CFG.get("reservoirs", []))
+    if total_rain < 30:
+        judgements.append(f"❸ 降雨整体偏少→来水无突变")
+    else:
+        judgements.append(f"❸ 关注来水增加后的偏空压力")
+    
+    ly_high = _archive_val(results, "成都", "high")
+    if ly_high[0] is not None:
+        diff = max(cd_eh[0], cd_ch[0]) - ly_high[0]
+        if abs(diff) >= 3:
+            warmer = "强于" if diff > 0 else "弱于"
+            judgements.append(f"❹ 今年高温{warmer}去年(+{abs(diff):.0f}°C→供需偏紧)")
+    
+    return judgements
+
 def _quality_tag(q):
-    """数据质量一行标记"""
     e = q["ecmwf_ok"]; c = q["cma_ok"]; a = q["archive_ok"]; t = q["total"]
     ok_ratio = (e + c) / (2 * t) if t > 0 else 0
     if ok_ratio >= 0.95: grade = "高"
@@ -302,7 +341,7 @@ def format_markdown(fetched):
     for rs in CFG.get("reservoirs", []):
         er = _fv(results, rs[0], "ecmwf", "rain")[0]
         cr = _fv(results, rs[0], "cma", "rain")[0]
-        avg = (er+cr)/2 if er is not None and cr is not None else max(er or 0, cr or 0)
+        avg = (er+cr)/2
         if avg > max_r_v: max_r_v = avg; max_r_st = rs[0]
     
     parts = []
@@ -379,44 +418,7 @@ def format_markdown(fetched):
     
     # ─── 📊 综合研判 ───
     lines.append(f"\n📊 综合研判")
-    judgements = []
-    fc_line = TH["temperature"]["forced_cooling"]  # 从 config 读取
-    
-    # 负荷趋势
-    if t0 >= fc_line and t1 >= fc_line - 2:
-        judgements.append(f"❶ 今明高温支撑晚峰→D+1~D+2偏紧")
-        if t2 < 30:
-            judgements[-1] += "，后天降温→D+3负荷回落"
-    elif t2 < 30:
-        judgements.append(f"❶ 后天降温→D+3负荷回落")
-    
-    # 来水
-    for rs in CFG.get("reservoirs", []):
-        if len(rs) > 4 and rs[4]:
-            er = _fv(results, rs[0], "ecmwf", "rain")[0]
-            cr = _fv(results, rs[0], "cma", "rain")[0]
-            avg = (er+cr)/2; lag = LAG.get(rs[3], "")
-            if avg >= TH["rainfall"]["medium"]:
-                div = " ⚠分歧" if _divergence(er, cr) else ""
-                judgements.append(f"❷ {rs[0]}{lag}{avg:.0f}mm{div}→入库改善偏空")
-                break
-    
-    # 整体来水
-    total_rain = sum(_fv(results, r[0], "ecmwf", "rain")[0] for r in CFG.get("reservoirs", []))
-    if total_rain < 30:
-        judgements.append(f"❸ 降雨整体偏少→来水无突变")
-    else:
-        judgements.append(f"❸ 关注来水增加后的偏空压力")
-    
-    # 去年同期
-    ly_high = _archive_val(results, "成都", "high")
-    if ly_high[0] is not None:
-        diff = max(cd_eh[0], cd_ch[0]) - ly_high[0]
-        if abs(diff) >= 3:
-            warmer = "强于" if diff > 0 else "弱于"
-            judgements.append(f"❹ 今年高温{warmer}去年(+{abs(diff):.0f}°C→供需偏紧)")
-    
-    for j in judgements:
+    for j in _build_judgements(results):
         lines.append(f"  {j}")
     
     lines.append(f"\n数据: ECMWF+CMA | {_quality_tag(quality)} | {td} 08:30")
@@ -494,42 +496,8 @@ def _build_dashboard_data(fetched):
         wind["series"].append({"name": f"{st[0]}(E)", "data": [round(v,1) for v in ew[:FORECAST_DAYS]], "type": "ecmwf"})
         wind["series"].append({"name": f"{st[0]}(C)", "data": [round(v,1) for v in cw[:FORECAST_DAYS]], "type": "cma"})
     
-    # ── 研判文本（直接生成，不耦合 format_markdown）──
-    judgements = []
-    cd_eh = _fv(results, "成都", "ecmwf", "high")
-    cd_ch = _fv(results, "成都", "cma", "high")
-    fc_line = TH["temperature"]["forced_cooling"]
-    t0, t1, t2 = max(cd_eh[0], cd_ch[0]), max(cd_eh[1], cd_ch[1]), max(cd_eh[2], cd_ch[2])
-    
-    if t0 >= fc_line and t1 >= fc_line - 2:
-        s = f"❶ 今明高温支撑晚峰→D+1~D+2偏紧"
-        if t2 < 30: s += "，后天降温→D+3负荷回落"
-        judgements.append(s)
-    elif t2 < 30:
-        judgements.append(f"❶ 后天降温→D+3负荷回落")
-    
-    for rs in CFG.get("reservoirs", []):
-        if len(rs) > 4 and rs[4]:
-            er = _fv(results, rs[0], "ecmwf", "rain")[0]
-            cr = _fv(results, rs[0], "cma", "rain")[0]
-            avg = (er+cr)/2; lag = LAG.get(rs[3], "")
-            if avg >= TH["rainfall"]["medium"]:
-                div = " ⚠分歧" if _divergence(er, cr) else ""
-                judgements.append(f"❷ {rs[0]}{lag}{avg:.0f}mm{div}→入库改善偏空")
-                break
-    
-    total_rain = sum(_fv(results, r[0], "ecmwf", "rain")[0] for r in CFG.get("reservoirs", []))
-    if total_rain < 30:
-        judgements.append(f"❸ 降雨整体偏少→来水无突变")
-    else:
-        judgements.append(f"❸ 关注来水增加后的偏空压力")
-    
-    ly_high = _archive_val(results, "成都", "high")
-    if ly_high[0] is not None:
-        diff = max(cd_eh[0], cd_ch[0]) - ly_high[0]
-        if abs(diff) >= 3:
-            warmer = "强于" if diff > 0 else "弱于"
-            judgements.append(f"❹ 今年高温{warmer}去年(+{abs(diff):.0f}°C→供需偏紧)")
+    # ── 研判文本 ──
+    judgements = _build_judgements(results)
     
     # ── 盆地高温 ──
     hotspots = []
