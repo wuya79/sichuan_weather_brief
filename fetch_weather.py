@@ -673,16 +673,19 @@ body{{background:#0f0f1a;color:#d0d0d0;font:13px/1.5 -apple-system,PingFang SC,M
     _solar_js_parts = []
     for _si, _s in enumerate(data["solar"]["series"]):
         _c = _solar_colors[_si % len(_solar_colors)]
-        _style = "solid" if _s["type"] == "ecmwf" else "dashed"
-        _js = f"{{{{name:'{_s['name']}',type:'bar',yAxisIndex:0,data:{_s['data']},itemStyle:{{{{color:'{_c}',borderRadius:[3,3,0,0]}}}},barCategoryGap:'20%'}}}}"
+        _name = _s['name'].replace("'", "\\'")
+        _data = json.dumps(_s['data'])
+        _js = "{name:'%s',type:'bar',yAxisIndex:0,data:%s,itemStyle:{color:'%s',borderRadius:[3,3,0,0]},barCategoryGap:'20%%'}" % (_name, _data, _c)
         _solar_js_parts.append(_js)
     _solar_series_js = ",\n    ".join(_solar_js_parts)
     
     _wind_js_parts = []
     for _wi, _w in enumerate(data["wind"]["series"]):
         _c = _wind_colors[_wi % len(_wind_colors)]
+        _name = _w['name'].replace("'", "\\'")
+        _data = json.dumps(_w['data'])
         _style = "solid" if _w["type"] == "ecmwf" else "dashed"
-        _js = f"{{{{name:'{_w['name']}',type:'line',yAxisIndex:1,data:{_w['data']},lineStyle:{{{{color:'{_c}',type:'{_style}',width:1.2}}}},symbol:'circle',symbolSize:4}}}}"
+        _js = "{name:'%s',type:'line',yAxisIndex:1,data:%s,lineStyle:{color:'%s',type:'%s',width:1.2},symbol:'circle',symbolSize:4}" % (_name, _data, _c, _style)
         _wind_js_parts.append(_js)
     _wind_series_js = ",\n    ".join(_wind_js_parts)
     _fc_line_e = TH["temperature"]["forced_cooling"]  # 强制冷线值
