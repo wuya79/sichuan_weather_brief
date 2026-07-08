@@ -740,7 +740,7 @@ makeChart('chart_temp', {{
       symbol:s.type==='ecmwf'?'circle':'diamond',symbolSize:s.type==='ecmwf'?6:4,
       emphasis:{{focus:'series'}}
     }})),
-    {{name:'强制冷线',type:'line',data:Array(FORECAST_DAYS).fill(_fc_line_e),
+    {{name:'强制冷线',type:'line',data:Array(FORECAST_DAYS).fill({_fc_line_e}),
       lineStyle:{{color:'#EF5350',width:1,type:'dotted'}},
       symbol:'none',silent:true,z:0}}
   ]
