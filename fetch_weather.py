@@ -335,7 +335,7 @@ def format_markdown(fetched):
     
     hot_count = sum(1 for hs in CFG.get("basin_hotspots", [])
                     if max(_fv(results, hs[0], "ecmwf", "high")[0],
-                           _fv(results, hs[0], "cma", "high")[0]) >= 35)
+                           _fv(results, hs[0], "cma", "high")[0]) >= TH["temperature"]["forced_cooling"])
     
     max_r_st, max_r_v = "", 0
     for rs in CFG.get("reservoirs", []):
@@ -346,7 +346,7 @@ def format_markdown(fetched):
     
     parts = []
     t0, t1, t2 = max(cd_eh[0], cd_ch[0]), max(cd_eh[1], cd_ch[1]), max(cd_eh[2], cd_ch[2])
-    if t0 >= 33: parts.append("今明高温" if t1 >= 33 else "今天高温")
+    if t0 >= TH["temperature"]["cooling_support"]: parts.append("今明高温" if t1 >= TH["temperature"]["cooling_support"] else "今天高温")
     if t2 < 30: parts.append("后天降温")
     parts.append(f"≥35°C {hot_count}站")
     parts.append(f"{max_r_st}雨{max_r_v:.0f}mm" if max_r_st else "无明显降雨")
@@ -446,7 +446,7 @@ def _build_dashboard_data(fetched):
         temp_cards.append({"name": st[0], "temp": int(mx), "icon": icon})
     
     # ── 温度趋势(D→D+4) ──
-    temp_trend = {"days": day_labels, "series": [], "alert_line": 35}
+    temp_trend = {"days": day_labels, "series": []}
     for st in CFG.get("load_cities", []):
         eh = _fv(results, st[0], "ecmwf", "high")
         ch = _fv(results, st[0], "cma", "high")
@@ -620,7 +620,10 @@ body{{background:#0f0f1a;color:#d0d0d0;font:14px/1.6 -apple-system,PingFang SC,M
 
     for card in data["temp_cards"]:
         t = card["temp"]
-        cls = "hot" if t >= 35 else "warm" if t >= 33 else "mild" if t >= 30 else "cool"
+        fc = TH["temperature"]["forced_cooling"]
+        cs = TH["temperature"]["cooling_support"]
+        mc = TH["temperature"]["mild_cooling"]
+        cls = "hot" if t >= fc else "warm" if t >= cs else "mild" if t >= mc else "cool"
         html += f'<div class="card {cls}"><div class="name">{card["name"]}</div><div class="temp">{t}°</div><div class="icon">{card["icon"]}</div></div>\n'
 
     html += '</div>\n\n'
@@ -699,7 +702,8 @@ body{{background:#0f0f1a;color:#d0d0d0;font:14px/1.6 -apple-system,PingFang SC,M
     _wind_series_js = ",\n    ".join(_wind_js_parts)
     _fc_line_e = TH["temperature"]["forced_cooling"]  # 强制冷线值
     
-    html += f'<div class="footer">ECMWF IFS + CMA GRAPES · 36站 · {data["date"]} 08:30</div>'
+    st_count = len(_build_station_list())
+    html += f'<div class="footer">ECMWF IFS + CMA GRAPES · {st_count}站 · {data["date"]} 08:30</div>'
     
     # ── ECharts 图表脚本 ──
     html += f'''</div>
