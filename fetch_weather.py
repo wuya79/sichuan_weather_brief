@@ -725,25 +725,31 @@ function makeChart(id, option) {{
   window.addEventListener('resize', ()=>chart.resize());
 }}
 
-// ① 温度趋势
+// ① 温度趋势（热力图）
+const _raw = D.temp_trend.series;
+const _cityNames = [...new Set(_raw.map(function(s){{return s.name.replace(/\\(.\\)/,'');}}))];
+const _heatData = [];
+_cityNames.forEach(function(name, ci){{
+  const e = _raw.find(function(s){{return s.name===name+'(E)';}})||{{data:[]}};
+  const c = _raw.find(function(s){{return s.name===name+'(C)';}})||{{data:[]}};
+  D.temp_trend.days.forEach(function(day, di){{
+    _heatData.push([di, ci, Math.round(Math.max(e.data[di]||0, c.data[di]||0))]);
+  }});
+}});
 makeChart('chart_temp', {{
-  tooltip: {{trigger:'axis'}},
-  legend: {{type:'scroll',bottom:0,textStyle:{{color:'#aaa',fontSize:10}},data:D.temp_trend.series.filter(s=>s.type==='ecmwf').map(s=>s.name.replace('(E)',''))}},
-  grid: {{top:10,right:30,bottom:40,left:40}},
-  xAxis: {{type:'category',data:D.temp_trend.days,axisLine:{{lineStyle:{{color:'#444'}}}}}},
-  yAxis: {{type:'value',name:'°C',axisLine:{{lineStyle:{{color:'#444'}}}}}},
-  series: [
-    ...D.temp_trend.series.map(s => ({{
-      name:s.name,type:'line',data:s.data,
-      lineStyle:{{color:s.type==='ecmwf'?C_E:C_C,width:s.type==='ecmwf'?2:1,type:s.type==='ecmwf'?'solid':'dashed'}},
-      itemStyle:{{color:s.type==='ecmwf'?C_E:C_C}},
-      symbol:s.type==='ecmwf'?'circle':'diamond',symbolSize:s.type==='ecmwf'?6:4,
-      emphasis:{{focus:'series'}}
-    }})),
-    {{name:'强制冷线',type:'line',data:Array(FORECAST_DAYS).fill({_fc_line_e}),
-      lineStyle:{{color:'#EF5350',width:1,type:'dotted'}},
-      symbol:'none',silent:true,z:0}}
-  ]
+  tooltip: {{formatter:function(p){{return p.data[2]+'°C  '+_cityNames[p.data[1]]+'  '+D.temp_trend.days[p.data[0]];}}}},
+  grid: {{top:10,right:30,bottom:30,left:50}},
+  xAxis: {{type:'category',data:D.temp_trend.days,axisLabel:{{fontSize:11,color:'#aaa'}},position:'top'}},
+  yAxis: {{type:'category',data:_cityNames,axisLabel:{{fontSize:12,color:'#ddd'}},inverse:true}},
+  visualMap: {{
+    min:20,max:42,calculable:false,orient:'vertical',right:10,top:20,bottom:20,
+    inRange:{{color:['#4FC3F7','#AED581','#FFD54F','#FF8A65','#FF5252']}},
+    text:['高','低'],textStyle:{{color:'#aaa',fontSize:10}}
+  }},
+  series: [{{
+    type:'heatmap',data:_heatData,label:{{show:true,formatter:function(p){{return p.data[2];}},fontSize:14,color:'#fff'}},
+    emphasis:{{itemStyle:{{shadowBlur:10,shadowColor:'rgba(0,0,0,.5)'}}}}
+  }}]
 }});
 
 // ② 水库降雨
