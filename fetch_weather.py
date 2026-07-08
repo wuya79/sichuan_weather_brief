@@ -626,18 +626,22 @@ body{{background:#0f0f1a;color:#d0d0d0;font:13px/1.5 -apple-system,PingFang SC,M
 <div class="chart tall" id="chart_temp"></div></div>
 </div>
 
-<!-- 水库+新能源 双栏 -->
+<!-- 水库 -->
 <div class="chart-grid">
-<div class="chart-box"><h3>💧 水库 72h 降雨 (ECMWF深蓝 / CMA浅蓝)</h3>
+<div class="chart-box full"><h3>💧 水库 72h 降雨 (ECMWF深蓝 / CMA浅蓝)</h3>
 <div class="chart" id="chart_rain"></div></div>
-<div class="chart-box"><h3>☀️💨 新能源 D→D+1</h3>
-<div class="chart" id="chart_re"></div></div>
 </div>
 
-<!-- 去年同期 -->
+<!-- 光伏 -->
 <div class="chart-grid">
-<div class="chart-box full"><h3>📅 成都气温 今年 vs 去年</h3>
-<div class="chart" id="chart_yoy"></div></div>
+<div class="chart-box full"><h3>☀️ 光伏 D→D+1 (辐照度 W/m²)</h3>
+<div class="chart" id="chart_solar"></div></div>
+</div>
+
+<!-- 风电 -->
+<div class="chart-grid">
+<div class="chart-box full"><h3>💨 风电 D→D+1 (风速 m/s)</h3>
+<div class="chart" id="chart_wind"></div></div>
 </div>
 
 <!-- 补充信息行 -->
@@ -685,7 +689,7 @@ body{{background:#0f0f1a;color:#d0d0d0;font:13px/1.5 -apple-system,PingFang SC,M
         _name = _w['name'].replace("'", "\\'")
         _data = json.dumps(_w['data'])
         _style = "solid" if _w["type"] == "ecmwf" else "dashed"
-        _js = "{name:'%s',type:'line',yAxisIndex:1,data:%s,lineStyle:{color:'%s',type:'%s',width:1.2},symbol:'circle',symbolSize:4}" % (_name, _data, _c, _style)
+        _js = "{name:'%s',type:'line',data:%s,lineStyle:{color:'%s',type:'%s',width:1.2},symbol:'circle',symbolSize:4}" % (_name, _data, _c, _style)
         _wind_js_parts.append(_js)
     _wind_series_js = ",\n    ".join(_wind_js_parts)
     _fc_line_e = TH["temperature"]["forced_cooling"]  # 强制冷线值
@@ -744,34 +748,27 @@ makeChart('chart_rain', {{
   ]
 }});
 
-// ③ 新能源
-makeChart('chart_re', {{
+// ③ 光伏（所有站）
+makeChart('chart_solar', {{
   tooltip: {{trigger:'axis'}},
   legend: {{type:'scroll',bottom:0,textStyle:{{color:'#aaa',fontSize:9}}}},
-  grid: {{top:10,right:55,bottom:45,left:45}},
+  grid: {{top:10,right:30,bottom:45,left:45}},
   xAxis: {{type:'category',data:D.solar.days}},
-  yAxis: [
-    {{type:'value',name:'W/m²',axisLine:{{lineStyle:{{color:'#FFB74D'}}}}}},
-    {{type:'value',name:'m/s',axisLine:{{lineStyle:{{color:'#4FC3F7'}}}}}}
-  ],
+  yAxis: {{type:'value',name:'W/m²'}},
   series: [
-    {_solar_series_js},
-    {_wind_series_js}
+    {_solar_series_js}
   ]
 }});
 
-// ④ 去年同期
-makeChart('chart_yoy', {{
+// ④ 风电（所有站）
+makeChart('chart_wind', {{
   tooltip: {{trigger:'axis'}},
-  legend: {{bottom:0,textStyle:{{color:'#aaa',fontSize:11}}}},
-  grid: {{top:10,right:20,bottom:30,left:40}},
-  xAxis: {{type:'category',data:D.yoy.days}},
-  yAxis: {{type:'value',name:'°C'}},
+  legend: {{type:'scroll',bottom:0,textStyle:{{color:'#aaa',fontSize:9}}}},
+  grid: {{top:10,right:30,bottom:45,left:45}},
+  xAxis: {{type:'category',data:D.wind.days}},
+  yAxis: {{type:'value',name:'m/s'}},
   series: [
-    {{name:'今年(ECMWF/CMA取高)',type:'line',data:D.yoy.this_year,
-      lineStyle:{{color:C_E,width:2.5}},itemStyle:{{color:C_E}},symbol:'circle',symbolSize:8}},
-    {{name:'去年',type:'line',data:D.yoy.last_year,
-      lineStyle:{{color:'#81C784',width:2,type:'dashed'}},itemStyle:{{color:'#81C784'}},symbol:'diamond',symbolSize:7}}
+    {_wind_series_js}
   ]
 }});
 </script>
