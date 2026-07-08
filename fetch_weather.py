@@ -321,8 +321,8 @@ def format_markdown(fetched):
         eh = _fv(results, st[0], "ecmwf", "high")
         ch = _fv(results, st[0], "cma", "high")
         if all(h==0 for h in eh[:3]+ch[:3]): continue
-        e_part = "/".join(f"{h:.0f}" for h in eh[:3]) if eh[0] else "-"
-        c_part = "/".join(f"{h:.0f}" for h in ch[:3]) if ch[0] else "-"
+        e_part = "/".join(f"{h:.0f}" for h in eh[:3]) if any(h for h in eh[:3]) else "-"
+        c_part = "/".join(f"{h:.0f}" for h in ch[:3]) if any(h for h in ch[:3]) else "-"
         icons = "".join(_temp_icon(max(eh[i], ch[i])) for i in range(3) if eh[i] or ch[i])
         lines.append(f"  {st[0]:4s}  {e_part}  |  {c_part}  {icons}")
     
@@ -343,7 +343,6 @@ def format_markdown(fetched):
     
     # ─── 💧 水电区域 ───
     lines.append(f"\n💧 水电区域（降雨mm→入库滞后 / ECMWF·CMA）")
-    reservoir_cfg = {r[0]: r for r in CFG.get("reservoirs", [])}
     for rs in CFG.get("reservoirs", []):
         er = _fv(results, rs[0], "ecmwf", "rain")[0]
         cr = _fv(results, rs[0], "cma", "rain")[0]
@@ -383,29 +382,29 @@ def format_markdown(fetched):
     # ─── 📊 综合研判 ───
     lines.append(f"\n📊 综合研判")
     judgements = []
-    n = 0
+    fc_line = TH["temperature"]["forced_cooling"]  # 从 config 读取
     
     # 负荷趋势
-    if t0 >= 35 and t1 >= 33:
-        n+=1; judgements.append(f"❶ 今明高温支撑晚峰→D+1~D+2偏紧")
-    if t2 < 30:
-        if not judgements: n+=1; judgements.append(f"❶ ")
-        judgements[-1] += "，后天降温→D+3负荷回落" if "今明" in judgements[-1] else "后天降温→D+3负荷回落"
+    if t0 >= fc_line and t1 >= fc_line - 2:
+        judgements.append(f"❶ 今明高温支撑晚峰→D+1~D+2偏紧")
+        if t2 < 30:
+            judgements[-1] += "，后天降温→D+3负荷回落"
+    elif t2 < 30:
+        judgements.append(f"❶ 后天降温→D+3负荷回落")
     
     # 来水
     for rs in CFG.get("reservoirs", []):
-        if len(rs) > 4 and rs[4]:  # 龙头站
+        if len(rs) > 4 and rs[4]:
             er = _fv(results, rs[0], "ecmwf", "rain")[0]
             cr = _fv(results, rs[0], "cma", "rain")[0]
             avg = (er+cr)/2; lag = LAG.get(rs[3], "")
             if avg >= TH["rainfall"]["medium"]:
-                n+=1; div = " ⚠分歧" if _divergence(er, cr) else ""
+                div = " ⚠分歧" if _divergence(er, cr) else ""
                 judgements.append(f"❷ {rs[0]}{lag}{avg:.0f}mm{div}→入库改善偏空")
                 break
     
     # 整体来水
     total_rain = sum(_fv(results, r[0], "ecmwf", "rain")[0] for r in CFG.get("reservoirs", []))
-    n+=1
     if total_rain < 30:
         judgements.append(f"❸ 降雨整体偏少→来水无突变")
     else:
@@ -416,8 +415,8 @@ def format_markdown(fetched):
     if ly_high[0] is not None:
         diff = max(cd_eh[0], cd_ch[0]) - ly_high[0]
         if abs(diff) >= 3:
-            n+=1
-            judgements.append(f"❹ 今年高温{'强于' if diff>0 else '弱于'}去年(+{abs(diff):.0f}°C→供需偏紧)")
+            warmer = "强于" if diff > 0 else "弱于"
+            judgements.append(f"❹ 今年高温{warmer}去年(+{abs(diff):.0f}°C→供需偏紧)")
     
     for j in judgements:
         lines.append(f"  {j}")
@@ -667,8 +666,29 @@ body{{background:#0f0f1a;color:#d0d0d0;font:13px/1.5 -apple-system,PingFang SC,M
             html += f'<p>{j}</p>\n'
         html += '</div>\n\n'
 
-    html += f'<div class="footer">ECMWF IFS + CMA GRAPES · 36站 · {data["date"]} 08:30 · <a href="http://118.24.77.156:18080/weather/" style="color:#4FC3F7">刷新</a></div>\n'
-
+    # ── ECharts 图表脚本 ──
+    # 动态构建新能源系列（所有光伏+风电站）
+    _solar_colors = ['#FFA726','#FFCC80','#FF9800','#FFE0B2','#F57C00','#FFECB3']
+    _wind_colors  = ['#4FC3F7','#B3E5FC','#29B6F6','#E1F5FE','#03A9F4','#BBDEFB']
+    _solar_js_parts = []
+    for _si, _s in enumerate(data["solar"]["series"]):
+        _c = _solar_colors[_si % len(_solar_colors)]
+        _style = "solid" if _s["type"] == "ecmwf" else "dashed"
+        _js = f"{{{{name:'{_s['name']}',type:'bar',yAxisIndex:0,data:{_s['data']},itemStyle:{{{{color:'{_c}',borderRadius:[3,3,0,0]}}}},barCategoryGap:'20%'}}}}"
+        _solar_js_parts.append(_js)
+    _solar_series_js = ",\n    ".join(_solar_js_parts)
+    
+    _wind_js_parts = []
+    for _wi, _w in enumerate(data["wind"]["series"]):
+        _c = _wind_colors[_wi % len(_wind_colors)]
+        _style = "solid" if _w["type"] == "ecmwf" else "dashed"
+        _js = f"{{{{name:'{_w['name']}',type:'line',yAxisIndex:1,data:{_w['data']},lineStyle:{{{{color:'{_c}',type:'{_style}',width:1.2}}}},symbol:'circle',symbolSize:4}}}}"
+        _wind_js_parts.append(_js)
+    _wind_series_js = ",\n    ".join(_wind_js_parts)
+    _fc_line_e = TH["temperature"]["forced_cooling"]  # 强制冷线值
+    
+    html += f'<div class="footer">ECMWF IFS + CMA GRAPES · 36站 · {data["date"]} 08:30</div>'
+    
     # ── ECharts 图表脚本 ──
     html += f'''</div>
 <script>
@@ -693,7 +713,7 @@ makeChart('chart_temp', {{
   legend: {{type:'scroll',bottom:0,textStyle:{{color:'#aaa',fontSize:10}},data:D.temp_trend.series.filter(s=>s.type==='ecmwf').map(s=>s.name.replace('(E)',''))}},
   grid: {{top:10,right:30,bottom:40,left:40}},
   xAxis: {{type:'category',data:D.temp_trend.days,axisLine:{{lineStyle:{{color:'#444'}}}}}},
-  yAxis: {{type:'value',name:'°C',min:20,axisLine:{{lineStyle:{{color:'#444'}}}}}},
+  yAxis: {{type:'value',name:'°C',axisLine:{{lineStyle:{{color:'#444'}}}}}},
   series: [
     ...D.temp_trend.series.map(s => ({{
       name:s.name,type:'line',data:s.data,
@@ -702,7 +722,7 @@ makeChart('chart_temp', {{
       symbol:s.type==='ecmwf'?'circle':'diamond',symbolSize:s.type==='ecmwf'?6:4,
       emphasis:{{focus:'series'}}
     }})),
-    {{name:'强制冷线',type:'line',data:[35,35,35,35],
+    {{name:'强制冷线',type:'line',data:[{_fc_line_e},{_fc_line_e},{_fc_line_e},{_fc_line_e}],
       lineStyle:{{color:'#EF5350',width:1,type:'dotted'}},
       symbol:'none',silent:true,z:0}}
   ]
@@ -724,18 +744,16 @@ makeChart('chart_rain', {{
 // ③ 新能源
 makeChart('chart_re', {{
   tooltip: {{trigger:'axis'}},
-  legend: {{bottom:0,textStyle:{{color:'#aaa',fontSize:10}}}},
-  grid: {{top:10,right:50,bottom:40,left:40}},
+  legend: {{type:'scroll',bottom:0,textStyle:{{color:'#aaa',fontSize:9}}}},
+  grid: {{top:10,right:55,bottom:45,left:45}},
   xAxis: {{type:'category',data:D.solar.days}},
   yAxis: [
     {{type:'value',name:'W/m²',axisLine:{{lineStyle:{{color:'#FFB74D'}}}}}},
     {{type:'value',name:'m/s',axisLine:{{lineStyle:{{color:'#4FC3F7'}}}}}}
   ],
   series: [
-    {{name:'甘孜光伏(E)',type:'bar',yAxisIndex:0,data:[D.solar.series[0].data[0],D.solar.series[0].data[1]],itemStyle:{{color:'#FFA726',borderRadius:[3,3,0,0]}}}},
-    {{name:'甘孜光伏(C)',type:'bar',yAxisIndex:0,data:[D.solar.series[1].data[0],D.solar.series[1].data[1]],itemStyle:{{color:'#FFCC80',borderRadius:[3,3,0,0]}}}},
-    {{name:'凉山风电(E)',type:'line',yAxisIndex:1,data:D.wind.series[0].data,lineStyle:{{color:C_E}},symbol:'circle',symbolSize:6}},
-    {{name:'凉山风电(C)',type:'line',yAxisIndex:1,data:D.wind.series[1].data,lineStyle:{{color:C_C,type:'dashed'}},symbol:'diamond',symbolSize:5}}
+    {_solar_series_js},
+    {_wind_series_js}
   ]
 }});
 
@@ -745,7 +763,7 @@ makeChart('chart_yoy', {{
   legend: {{bottom:0,textStyle:{{color:'#aaa',fontSize:11}}}},
   grid: {{top:10,right:20,bottom:30,left:40}},
   xAxis: {{type:'category',data:D.yoy.days}},
-  yAxis: {{type:'value',name:'°C',min:25,max:45}},
+  yAxis: {{type:'value',name:'°C'}},
   series: [
     {{name:'今年(ECMWF/CMA取高)',type:'line',data:D.yoy.this_year,
       lineStyle:{{color:C_E,width:2.5}},itemStyle:{{color:C_E}},symbol:'circle',symbolSize:8}},
