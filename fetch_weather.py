@@ -61,7 +61,8 @@ def _load_config():
 CFG = _load_config()
 TH  = CFG["thresholds"]
 LAG = CFG["basin_lag"]
-FORECAST_DAYS = 4  # D → D+3
+FORECAST_DAYS = 4  # 展示 D+1 → D+4
+API_DAYS      = 5  # API 多拉一天（含 D 日）
 FORECAST_URL  = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL   = "https://archive-api.open-meteo.com/v1/archive"
 API_TIMEOUT   = 10
@@ -77,8 +78,8 @@ def _api_fetch(lat, lon, model=None, archive=False):
         try:
             if archive:
                 today = date.today()
-                ly_start = (today.replace(year=today.year-1) - timedelta(days=2)).isoformat()
-                ly_end   = (today.replace(year=today.year-1) + timedelta(days=FORECAST_DAYS-1)).isoformat()
+                ly_start = (today.replace(year=today.year-1) - timedelta(days=1)).isoformat()
+                ly_end   = (today.replace(year=today.year-1) + timedelta(days=FORECAST_DAYS)).isoformat()
                 params = (f"latitude={lat}&longitude={lon}"
                           f"&start_date={ly_start}&end_date={ly_end}"
                           f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum"
@@ -88,7 +89,7 @@ def _api_fetch(lat, lon, model=None, archive=False):
             else:
                 params = (f"latitude={lat}&longitude={lon}"
                           f"&hourly=temperature_2m,precipitation,shortwave_radiation,wind_speed_80m,cloud_cover"
-                          f"&timezone=Asia/Shanghai&forecast_days={FORECAST_DAYS}")
+                          f"&timezone=Asia/Shanghai&forecast_days={API_DAYS}")
                 if model: params += f"&models={model}"
                 url = f"{FORECAST_URL}?{params}"
             with urlopen(url, timeout=API_TIMEOUT) as resp:
@@ -217,7 +218,7 @@ def _fc(results, name, model="ecmwf"):
     r = results.get(name, {})
     m = r.get(model) or {}
     today = date.today()
-    keys = [(today + timedelta(days=i)).isoformat() for i in range(FORECAST_DAYS)]
+    keys = [(today + timedelta(days=i+1)).isoformat() for i in range(FORECAST_DAYS)]  # D+1→D+4
     return [m.get(k, {}) for k in keys]
 
 def _fv(results, name, model, field, default=0):
@@ -231,7 +232,7 @@ def _archive_val(results, name, field):
     today = date.today()
     vals = []
     for i in range(FORECAST_DAYS):
-        ly_key = (today.replace(year=today.year-1) + timedelta(days=i)).isoformat()
+        ly_key = (today.replace(year=today.year-1) + timedelta(days=i+1)).isoformat()  # D+1→D+4
         vals.append(a[ly_key].get(field) if ly_key in a else None)
     return vals
 
@@ -316,7 +317,7 @@ def format_markdown(fetched):
     lines.append(f"\n📌 概况  {' | '.join(parts)}")
     
     # ─── 🌡️ 负荷城市 ───
-    lines.append(f"\n🌡️ 负荷城市（D→D+2 气温 ECMWF/CMA）")
+    lines.append(f"\n🌡️ 负荷城市（D+1→D+3 气温 ECMWF/CMA）")
     for st in CFG.get("load_cities", []):
         eh = _fv(results, st[0], "ecmwf", "high")
         ch = _fv(results, st[0], "cma", "high")
@@ -368,13 +369,13 @@ def format_markdown(fetched):
     lines.append(f"  🏔 融雪: {' '.join(snow_parts)}°C → {'正常' if snow_ok else '⚠低温'}")
     
     # ─── ☀️ 光伏 ───
-    lines.append(f"\n☀️ 光伏（辐照度W/m² D→D+1 / ECMWF·CMA）")
+    lines.append(f"\n☀️ 光伏（辐照度W/m² D+1→D+2 / ECMWF·CMA）")
     for st in CFG.get("solar", []):
         er = _fv(results, st[0], "ecmwf", "rad"); cr = _fv(results, st[0], "cma", "rad")
         lines.append(f"  {st[0]:6s}  E{er[0]:4.0f}→{er[1]:4.0f}/C{cr[0]:4.0f}→{cr[1]:4.0f}  {_solar_judge(er[0])}/{_solar_judge(cr[0])}")
     
     # ─── 💨 风电 ───
-    lines.append(f"\n💨 风电（风速m/s D→D+1 / ECMWF·CMA）")
+    lines.append(f"\n💨 风电（风速m/s D+1→D+2 / ECMWF·CMA）")
     for st in CFG.get("wind_farms", []):
         ew = _fv(results, st[0], "ecmwf", "wind"); cw = _fv(results, st[0], "cma", "wind")
         lines.append(f"  {st[0]:6s}  E{ew[0]:3.1f}→{ew[1]:3.1f}/C{cw[0]:3.1f}→{cw[1]:3.1f}  {_wind_judge(ew[0])}/{_wind_judge(cw[0])}")
@@ -433,7 +434,7 @@ def _build_dashboard_data(fetched):
     """构建 ECharts 仪表盘所需的完整 JSON 数据"""
     results = fetched["results"]
     today = date.today()
-    day_labels = [(today + timedelta(days=i)).strftime("%m/%d") for i in range(FORECAST_DAYS)]
+    day_labels = [(today + timedelta(days=i+1)).strftime("%m/%d") for i in range(FORECAST_DAYS)]  # D+1→D+4
     
     # ── 温度卡片 ──
     temp_cards = []
@@ -557,46 +558,70 @@ def generate_html(fetched, elapsed=0.0):
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
-body{{background:#0f0f1a;color:#d0d0d0;font:13px/1.5 -apple-system,PingFang SC,Microsoft YaHei,sans-serif;min-height:100vh}}
-.header{{background:linear-gradient(135deg,#1a1a3e,#0d1b3e);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #2a2a4a;flex-wrap:wrap;gap:8px}}
-.header h1{{font-size:20px;color:#fff}}
-.header .meta{{display:flex;gap:12px;font-size:12px;color:#aaa;flex-wrap:wrap}}
-.header .meta span{{background:#1e2d4a;padding:3px 10px;border-radius:4px}}
-.container{{max-width:1100px;margin:0 auto;padding:12px 16px}}
+body{{background:#0f0f1a;color:#d0d0d0;font:14px/1.6 -apple-system,PingFang SC,Microsoft YaHei,sans-serif;min-height:100vh}}
+.header{{background:linear-gradient(135deg,#1a1a3e,#0d1b3e);padding:20px 32px;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #2a2a4a;flex-wrap:wrap;gap:12px}}
+.header h1{{font-size:22px;color:#fff;letter-spacing:1px}}
+.header .meta{{display:flex;gap:16px;font-size:13px;color:#aaa;flex-wrap:wrap}}
+.header .meta span{{background:#1e2d4a;padding:4px 12px;border-radius:5px}}
+.container{{max-width:1300px;margin:0 auto;padding:16px 24px}}
 
-.cards{{display:grid;grid-template-columns:repeat(auto-fill,minmax(115px,1fr));gap:8px;margin-bottom:16px}}
-.card{{background:linear-gradient(135deg,#1e2d4a,#162040);border-radius:10px;padding:10px 12px;text-align:center;border:1px solid #2a3a5a;transition:all 0.2s}}
-.card:hover{{border-color:#4FC3F7;transform:translateY(-1px)}}
-.card .name{{font-size:12px;color:#aaa;margin-bottom:4px}}
-.card .temp{{font-size:26px;font-weight:700;margin:4px 0}}
-.card .icon{{font-size:12px}}
+.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:20px}}
+.card{{background:linear-gradient(135deg,#1e2d4a,#162040);border-radius:12px;padding:14px 16px;text-align:center;border:1px solid #2a3a5a;transition:all 0.2s}}
+.card:hover{{border-color:#4FC3F7;transform:translateY(-2px);box-shadow:0 4px 16px rgba(79,195,247,.15)}}
+.card .name{{font-size:13px;color:#aaa;margin-bottom:6px}}
+.card .temp{{font-size:32px;font-weight:700;margin:6px 0}}
+.card .icon{{font-size:14px}}
 .card.hot .temp{{color:#FF5252}}
 .card.warm .temp{{color:#FFB74D}}
 .card.mild .temp{{color:#FFD740}}
 .card.cool .temp{{color:#4FC3F7}}
 
-.chart-grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}}
-.chart-box{{background:#161625;border-radius:10px;padding:12px;border:1px solid #2a2a4a}}
+.chart-grid{{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}}
+.chart-box{{background:#161625;border-radius:12px;padding:16px;border:1px solid #2a2a4a}}
 .chart-box.full{{grid-column:1/-1}}
-.chart-box h3{{font-size:14px;color:#ccc;margin-bottom:8px;font-weight:500}}
-.chart-box .chart{{width:100%;height:280px}}
-.chart-box .chart.tall{{height:320px}}
+.chart-box h3{{font-size:15px;color:#ccc;margin-bottom:10px;font-weight:500}}
+.chart-box .chart{{width:100%;height:300px}}
+.chart-box .chart.tall{{height:360px}}
 
-.info-row{{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-bottom:12px}}
-.info-card{{background:#161625;border-radius:8px;padding:10px 14px;border:1px solid #2a2a4a}}
-.info-card h4{{font-size:12px;color:#888;margin-bottom:6px}}
-.info-card .val{{font-size:13px;color:#ddd;line-height:1.6}}
+.info-row{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:16px}}
+.info-card{{background:#161625;border-radius:10px;padding:14px 18px;border:1px solid #2a2a4a}}
+.info-card h4{{font-size:13px;color:#888;margin-bottom:8px}}
+.info-card .val{{font-size:14px;color:#ddd;line-height:1.7}}
 
-.judge{{background:linear-gradient(135deg,#1a2a1a,#1a1a2e);border-radius:10px;padding:16px 20px;border:1px solid #2a4a2a;margin-bottom:12px}}
-.judge h3{{font-size:14px;color:#81C784;margin-bottom:10px}}
-.judge p{{font-size:13px;line-height:1.8;color:#c0c0c0;margin:2px 0}}
+.judge{{background:linear-gradient(135deg,#1a2a1a,#1a1a2e);border-radius:12px;padding:20px 24px;border:1px solid #2a4a2a;margin-bottom:16px}}
+.judge h3{{font-size:15px;color:#81C784;margin-bottom:12px}}
+.judge p{{font-size:14px;line-height:2;color:#c0c0c0;margin:3px 0}}
 
-.footer{{text-align:center;color:#555;font-size:11px;padding:16px 0 24px}}
+.footer{{text-align:center;color:#555;font-size:12px;padding:20px 0 32px}}
 
+/* 平板 */
+@media(max-width:1024px){{
+  .container{{padding:12px 16px}}
+  .header{{padding:16px 20px}}
+  .chart-box .chart{{height:260px}}
+  .chart-box .chart.tall{{height:300px}}
+}}
+
+/* 手机 */
 @media(max-width:768px){{
   .chart-grid{{grid-template-columns:1fr}}
   .cards{{grid-template-columns:repeat(4,1fr)}}
-  .header{{flex-direction:column;align-items:flex-start}}
+  .card .temp{{font-size:22px}}
+  .header h1{{font-size:18px}}
+  .header{{flex-direction:column;align-items:flex-start;padding:14px 16px}}
+  .header .meta{{gap:8px;font-size:11px}}
+  .chart-box .chart{{height:240px}}
+  .chart-box .chart.tall{{height:260px}}
+  .info-row{{grid-template-columns:1fr}}
+}}
+
+/* 大屏 */
+@media(min-width:1600px){{
+  .container{{max-width:1500px}}
+  .cards{{grid-template-columns:repeat(8,1fr)}}
+  .chart-grid{{grid-template-columns:1fr 1fr}}
+  .chart-box .chart{{height:340px}}
+  .chart-box .chart.tall{{height:400px}}
 }}
 </style>
 </head>
@@ -622,7 +647,7 @@ body{{background:#0f0f1a;color:#d0d0d0;font:13px/1.5 -apple-system,PingFang SC,M
 
     # ── 温度趋势图 ──
     html += '''<div class="chart-grid">
-<div class="chart-box full"><h3>📈 负荷城市 D→D+3 气温趋势 (ECMWF实线 / CMA虚线 · 35°C警戒)</h3>
+<div class="chart-box full"><h3>📈 负荷城市 D+1→D+4 气温趋势 (ECMWF实线 / CMA虚线 · 35°C警戒)</h3>
 <div class="chart tall" id="chart_temp"></div></div>
 </div>
 
@@ -634,13 +659,13 @@ body{{background:#0f0f1a;color:#d0d0d0;font:13px/1.5 -apple-system,PingFang SC,M
 
 <!-- 光伏 -->
 <div class="chart-grid">
-<div class="chart-box full"><h3>☀️ 光伏 D→D+1 (辐照度 W/m²)</h3>
+<div class="chart-box full"><h3>☀️ 光伏 D+1→D+2 (辐照度 W/m²)</h3>
 <div class="chart" id="chart_solar"></div></div>
 </div>
 
 <!-- 风电 -->
 <div class="chart-grid">
-<div class="chart-box full"><h3>💨 风电 D→D+1 (风速 m/s)</h3>
+<div class="chart-box full"><h3>💨 风电 D+1→D+2 (风速 m/s)</h3>
 <div class="chart" id="chart_wind"></div></div>
 </div>
 
