@@ -479,20 +479,20 @@ def _build_dashboard_data(fetched):
         upstream.append({"name": st[0], "rain": round(max(er,cr), 1)})
     
     # ── 光伏 ──
-    solar = {"days": day_labels[:2], "series": []}
+    solar = {"days": day_labels, "series": []}
     for st in CFG.get("solar", []):
         er = _fv(results, st[0], "ecmwf", "rad")
         cr = _fv(results, st[0], "cma", "rad")
-        solar["series"].append({"name": f"{st[0]}(E)", "data": [round(er[0]), round(er[1])], "type": "ecmwf"})
-        solar["series"].append({"name": f"{st[0]}(C)", "data": [round(cr[0]), round(cr[1])], "type": "cma"})
+        solar["series"].append({"name": f"{st[0]}(E)", "data": [round(v) for v in er[:FORECAST_DAYS]], "type": "ecmwf"})
+        solar["series"].append({"name": f"{st[0]}(C)", "data": [round(v) for v in cr[:FORECAST_DAYS]], "type": "cma"})
     
     # ── 风电 ──
-    wind = {"days": day_labels[:2], "series": []}
+    wind = {"days": day_labels, "series": []}
     for st in CFG.get("wind_farms", []):
         ew = _fv(results, st[0], "ecmwf", "wind")
         cw = _fv(results, st[0], "cma", "wind")
-        wind["series"].append({"name": f"{st[0]}(E)", "data": [round(ew[0],1), round(ew[1],1)], "type": "ecmwf"})
-        wind["series"].append({"name": f"{st[0]}(C)", "data": [round(cw[0],1), round(cw[1],1)], "type": "cma"})
+        wind["series"].append({"name": f"{st[0]}(E)", "data": [round(v,1) for v in ew[:FORECAST_DAYS]], "type": "ecmwf"})
+        wind["series"].append({"name": f"{st[0]}(C)", "data": [round(v,1) for v in cw[:FORECAST_DAYS]], "type": "cma"})
     
     # ── 研判文本（直接生成，不耦合 format_markdown）──
     judgements = []
@@ -671,13 +671,13 @@ body{{background:#0f0f1a;color:#d0d0d0;font:14px/1.6 -apple-system,PingFang SC,M
 
 <!-- 光伏 -->
 <div class="chart-grid">
-<div class="chart-box full"><h3>☀️ 光伏 D+1→D+2 (辐照度 W/m²)</h3>
+<div class="chart-box full"><h3>☀️ 光伏 D→D+4 (辐照度 W/m²)</h3>
 <div class="chart" id="chart_solar"></div></div>
 </div>
 
 <!-- 风电 -->
 <div class="chart-grid">
-<div class="chart-box full"><h3>💨 风电 D+1→D+2 (风速 m/s)</h3>
+<div class="chart-box full"><h3>💨 风电 D→D+4 (风速 m/s)</h3>
 <div class="chart" id="chart_wind"></div></div>
 </div>
 
