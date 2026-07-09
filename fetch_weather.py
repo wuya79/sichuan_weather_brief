@@ -422,7 +422,7 @@ def format_markdown(fetched):
         lines.append(f"  {j}")
     
     lines.append(f"\n数据: ECMWF+CMA | {_quality_tag(quality)} | {td} 08:30")
-    lines.append("[🌐 Web仪表盘](http://118.24.77.156:18080/weather/)")
+    lines.append("🌐 Web仪表盘\nhttp://118.24.77.156:18080/weather/")
     return "\n".join(lines)
 
 
